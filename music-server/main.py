@@ -117,11 +117,13 @@ def get_stream_url(video_id: str) -> dict:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     logger.info(f"Getting stream for: {video_id}")
 
-    # Thử các client theo thứ tự
-    clients = [["tv_embedded"], ["web_embedded"], ["web"], ["mweb"]]
+    # Thử các client theo thứ tự - tv_embedded trước vì hoạt động tốt nhất với cookies
+    clients = [["tv_embedded"], ["web"], ["web_embedded"], ["mweb"]]
     fmt = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=webm]/bestaudio"
 
     last_error = ""
+    cookies_f = get_cookies_file()
+    logger.info(f"Using cookies file: {cookies_f}, exists: {bool(cookies_f and os.path.exists(cookies_f))}")
     for client in clients:
         opts = make_ydl_opts({
             "format": fmt,
