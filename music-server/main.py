@@ -1,6 +1,6 @@
 """
-Xiaozhi Music Server - Deploy lên Render.com (free tier)
-Dùng yt-dlp để tìm và lấy stream URL từ YouTube
+Xiaozhi Music Server v3.0 - Deploy lên Render.com (free tier)
+Dùng yt-dlp + YouTube cookies để bypass bot detection
 """
 
 from flask import Flask, jsonify, request
@@ -8,6 +8,7 @@ import yt_dlp
 import os
 import logging
 import re
+import tempfile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,15 +16,37 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # ============================================================
-# yt-dlp options - tối ưu cho server không có cookies
+# Cookies - lưu trong environment variable YOUTUBE_COOKIES
+# Nội dung file cookies.txt (Netscape format) từ browser
 # ============================================================
+COOKIES_FILE = None
+
+def get_cookies_file():
+    """Tạo temp file cookies từ env var YOUTUBE_COOKIES"""
+    global COOKIES_FILE
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        return COOKIES_FILE
+
+    cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
+    if not cookies_content:
+        logger.warning("YOUTUBE_COOKIES env var not set - may get bot detection")
+        return None
+
+    # Ghi ra temp file
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
+                                      delete=False, prefix='yt_cookies_')
+    tmp.write(cookies_content)
+    tmp.close()
+    COOKIES_FILE = tmp.name
+    logger.info(f"Cookies file created: {COOKIES_FILE}")
+    return COOKIES_FILE
+
 
 def make_ydl_opts(extra: dict = None) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        # Giả lập browser để tránh bot detection
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -32,32 +55,28 @@ def make_ydl_opts(extra: dict = None) -> dict:
             ),
             "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
         },
-        # Dùng tv_embedded client - không cần PO Token, ít bị block nhất
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["tv_embedded"],
-            }
-        },
-        # Bỏ qua lỗi không nghiêm trọng
-        "ignoreerrors": False,
         "socket_timeout": 30,
     }
+
+    # Thêm cookies nếu có
+    cookies_file = get_cookies_file()
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+
     if extra:
         opts.update(extra)
     return opts
 
 
 def search_song(song_name: str, artist_name: str = "") -> dict | None:
-    """Tìm kiếm bài hát, trả về videoId và title"""
     query = song_name
     if artist_name:
         query += f" {artist_name}"
-
     logger.info(f"Searching: {query}")
 
     opts = make_ydl_opts({
         "extract_flat": True,
-        "default_search": "ytsearch5",
+        "extractor_args": {"youtube": {"player_client": ["tv_embedded"]}},
     })
 
     try:
@@ -65,7 +84,6 @@ def search_song(song_name: str, artist_name: str = "") -> dict | None:
             result = ydl.extract_info(f"ytsearch5:{query}", download=False)
             if not result or "entries" not in result:
                 return None
-
             for entry in result["entries"]:
                 if entry and entry.get("duration", 0) > 0:
                     logger.info(f"Found: {entry.get('title')} [{entry.get('id')}]")
@@ -76,86 +94,61 @@ def search_song(song_name: str, artist_name: str = "") -> dict | None:
                     }
     except Exception as e:
         logger.error(f"Search error: {e}")
-
     return None
 
 
-def get_stream_url(video_id: str) -> dict | None:
-    """
-    Lấy direct audio stream URL.
-    Thử nhiều format theo thứ tự ưu tiên phù hợp ESP32.
-    """
+def get_stream_url(video_id: str) -> dict:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     logger.info(f"Getting stream for: {video_id}")
 
-    # Danh sách client theo thứ tự ưu tiên - không cần PO Token
-    client_attempts = [
-        ["tv_embedded"],
-        ["web_embedded"],
-        ["mweb"],
-    ]
-
-    format_str = "bestaudio[ext=m4a][abr<=160]/bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio"
+    # Thử các client theo thứ tự
+    clients = [["tv_embedded"], ["web_embedded"], ["web"], ["mweb"]]
+    fmt = "bestaudio[ext=m4a][abr<=160]/bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio"
 
     last_error = ""
-    for clients in client_attempts:
+    for client in clients:
         opts = make_ydl_opts({
-            "format": format_str,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": clients,
-                }
-            },
+            "format": fmt,
+            "extractor_args": {"youtube": {"player_client": client}},
         })
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(video_url, download=False)
-                if not info:
-                    last_error = f"No info from {clients}"
+                if not info or not info.get("url"):
+                    last_error = f"{client}: no URL"
                     continue
-
-                url = info.get("url")
-                if not url:
-                    last_error = f"No URL from {clients}"
-                    continue
-
-                ext = info.get("ext", "unknown")
-                abr = info.get("abr", 0)
-                acodec = info.get("acodec", "unknown")
-
-                logger.info(f"Stream OK via {clients}: ext={ext} abr={abr} codec={acodec}")
+                logger.info(f"Stream OK via {client}: ext={info.get('ext')} abr={info.get('abr')}")
                 return {
-                    "url": url,
-                    "ext": ext,
-                    "bitrate": abr,
-                    "codec": acodec,
+                    "url": info["url"],
+                    "ext": info.get("ext", "unknown"),
+                    "bitrate": info.get("abr", 0),
+                    "codec": info.get("acodec", "unknown"),
                     "title": info.get("title", ""),
                     "duration": info.get("duration", 0),
-                    "client": str(clients),
+                    "client": str(client),
                 }
         except yt_dlp.utils.DownloadError as e:
-            last_error = f"{clients}: {str(e)[:200]}"
-            logger.warning(f"Client {clients} failed: {e}")
-            continue
+            last_error = f"{client}: {str(e)[:300]}"
+            logger.warning(f"Client {client} failed: {str(e)[:200]}")
         except Exception as e:
-            last_error = f"{clients}: {str(e)[:200]}"
-            logger.error(f"Unexpected error for {clients}: {e}")
-            continue
+            last_error = f"{client}: {str(e)[:200]}"
+            logger.error(f"Unexpected: {e}")
 
-    logger.error(f"All clients failed for {video_id}. Last error: {last_error}")
     return {"_error": last_error}
 
 
 # ============================================================
-# API Endpoints
+# Endpoints
 # ============================================================
 
 @app.route("/", methods=["GET"])
 def index():
+    has_cookies = bool(os.environ.get("YOUTUBE_COOKIES"))
     return jsonify({
         "status": "ok",
         "service": "Xiaozhi Music Server",
-        "version": "2.0.0",
+        "version": "3.0.0",
+        "cookies_configured": has_cookies,
         "endpoints": {
             "/stream": "GET ?name=<song>&artist=<artist>",
             "/search": "GET ?q=<query>",
@@ -172,20 +165,6 @@ def health():
 
 @app.route("/stream", methods=["GET"])
 def stream():
-    """
-    Endpoint chính cho ESP32:
-    GET /stream?name=lac+troi&artist=son+tung+mtp
-
-    Response:
-    {
-        "audio_url": "https://...",
-        "title": "Lạc Trôi",
-        "duration": 245,
-        "format": "m4a",
-        "bitrate": 128,
-        "video_id": "..."
-    }
-    """
     song_name = request.args.get("name", "").strip()
     artist_name = request.args.get("artist", "").strip()
 
@@ -194,16 +173,15 @@ def stream():
 
     logger.info(f"=== /stream: name='{song_name}' artist='{artist_name}' ===")
 
-    # Bước 1: Tìm kiếm
     found = search_song(song_name, artist_name)
     if not found:
         return jsonify({"error": "Song not found", "query": song_name}), 404
 
-    # Bước 2: Lấy stream URL
     stream_info = get_stream_url(found["videoId"])
-    if not stream_info or not stream_info.get("url"):
+    if stream_info.get("_error"):
         return jsonify({
             "error": "Cannot get stream URL",
+            "detail": stream_info["_error"],
             "videoId": found["videoId"],
             "title": found.get("title"),
         }), 500
@@ -215,39 +193,29 @@ def stream():
         "format": stream_info.get("ext", "unknown"),
         "bitrate": stream_info.get("bitrate", 0),
         "video_id": found["videoId"],
+        "client": stream_info.get("client"),
     })
 
 
 @app.route("/search", methods=["GET"])
 def search():
-    """GET /search?q=lac+troi+son+tung"""
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify({"error": "Missing 'q' parameter"}), 400
-
-    # Tách thành song + artist nếu có dấu " - "
     parts = query.split(" - ", 1)
-    song = parts[0].strip()
-    artist = parts[1].strip() if len(parts) > 1 else ""
-
-    result = search_song(song, artist)
+    result = search_song(parts[0].strip(), parts[1].strip() if len(parts) > 1 else "")
     if not result:
         return jsonify({"error": "Not found"}), 404
-
     return jsonify(result)
 
 
 @app.route("/audio/<video_id>", methods=["GET"])
 def audio(video_id: str):
-    """GET /audio/dQw4w9WgXcQ"""
     if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
         return jsonify({"error": "Invalid videoId"}), 400
-
     stream_info = get_stream_url(video_id)
-    if not stream_info or stream_info.get("_error"):
-        err = stream_info.get("_error", "Unknown") if stream_info else "None returned"
-        return jsonify({"error": "Cannot get stream", "detail": err}), 500
-
+    if stream_info.get("_error"):
+        return jsonify({"error": "Cannot get stream", "detail": stream_info["_error"]}), 500
     return jsonify(stream_info)
 
 
