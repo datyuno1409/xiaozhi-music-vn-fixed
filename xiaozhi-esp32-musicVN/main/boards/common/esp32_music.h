@@ -86,6 +86,9 @@ private:
     // ID3标签处理
     size_t SkipId3Tag(uint8_t* data, size_t size);
 
+    // Music server (Render.com / Vercel) - gọi /stream?name=...&artist=...
+    bool DownloadViaPiped(const std::string& song_name, const std::string& artist_name);
+
     int16_t* final_pcm_data_fft = nullptr;
     void ForceCleanupCache();  // ← THÊM DÒNG NÀY
 public:

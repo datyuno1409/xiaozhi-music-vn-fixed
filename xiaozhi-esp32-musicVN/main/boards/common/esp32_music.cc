@@ -383,121 +383,98 @@ void Esp32Music::ForceCleanupCache() {
     ESP_LOGI(TAG, "Min free heap: %d bytes", esp_get_minimum_free_heap_size());
 }
 
-bool Esp32Music::Download(const std::string& song_name, const std::string& artist_name) {
-	ESP_LOGI(TAG, "=== NEW SONG REQUEST: Cleaning up old cache first ==="); //mới thêm
-    ForceCleanupCache(); //mới thêm
-    ESP_LOGI(TAG, "Xiaozhi Open Source Music - Vietnamese Support");
-    ESP_LOGI(TAG, "Getting music: %s", song_name.c_str());
-    
-    std::string detected_lang = DetectLanguage(song_name);
-    ESP_LOGI(TAG, "Detected language: %s", detected_lang.c_str());
-    
-    last_downloaded_data_.clear();
-    current_song_name_ = song_name;
-    
-    std::string base_url = "http://www.xiaozhishop.xyz:5005";
-    std::string query_params = "song=" + url_encode(song_name) + "&artist=" + url_encode(artist_name);
-    
-    if (detected_lang == "vietnamese") {
-        query_params += "&prefer_language=vietnamese&language_priority=vi,zh";
-        ESP_LOGI(TAG, "Vietnamese detected - prioritizing Vietnamese music");
-    }
-    
-    std::string full_url = base_url + "/stream_pcm?" + query_params;
-    
+// ========== Music Server (Render.com / Vercel) ==========
+// Thay YOUR_SERVER_URL bằng URL thực sau khi deploy
+// Ví dụ: "https://xiaozhi-music-server.onrender.com"
+static const std::string MUSIC_SERVER_URL = "https://robot-music-api.onrender.com";
+
+/**
+ * @brief Gọi server /stream?name=...&artist=... để lấy audio_url
+ * Server trả về JSON: {"audio_url": "...", "title": "...", "format": "m4a", ...}
+ */
+bool Esp32Music::DownloadViaPiped(const std::string& song_name, const std::string& artist_name) {
+    ESP_LOGI(TAG, "[MusicServer] Requesting: %s - %s", song_name.c_str(), artist_name.c_str());
+
+    std::string url = MUSIC_SERVER_URL + "/stream"
+                    + "?name=" + url_encode(song_name)
+                    + "&artist=" + url_encode(artist_name);
+
+    ESP_LOGI(TAG, "[MusicServer] URL: %s", url.c_str());
+
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
-    
-    http->SetHeader("User-Agent", "ESP32-Music-Vietnamese/1.0");
+    http->SetHeader("User-Agent", "ESP32-Xiaozhi/1.0");
     http->SetHeader("Accept", "application/json");
-    http->SetHeader("Accept-Language", "vi-VN,vi;q=0.9,en;q=0.8");
-    
-    add_auth_headers(http.get());
-    
-    if (!http->Open("GET", full_url)) {
-        ESP_LOGE(TAG, "Failed to connect");
+
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "[MusicServer] Cannot connect");
         return false;
     }
-    
-    int status_code = http->GetStatusCode();
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "HTTP failed: %d", status_code);
+
+    int status = http->GetStatusCode();
+    if (status != 200) {
+        ESP_LOGE(TAG, "[MusicServer] HTTP %d", status);
         http->Close();
         return false;
     }
-    
-    last_downloaded_data_ = http->ReadAll();
+
+    std::string body = http->ReadAll();
     http->Close();
-    
-    if (!last_downloaded_data_.empty()) {
-        cJSON* response_json = cJSON_Parse(last_downloaded_data_.c_str());
-        if (response_json) {
-            cJSON* audio_url = cJSON_GetObjectItem(response_json, "audio_url");
-            cJSON* lyric_url = cJSON_GetObjectItem(response_json, "lyric_url");
-            cJSON* language = cJSON_GetObjectItem(response_json, "language");
-            
-            if (cJSON_IsString(language)) {
-                ESP_LOGI(TAG, "Music language: %s", language->valuestring);
-                
-                if (detected_lang == "vietnamese" && 
-                    strcmp(language->valuestring, "chinese") == 0) {
-                    ESP_LOGW(TAG, "Warning: Vietnamese requested but Chinese received");
-                }
-            }
-            
-            if (cJSON_IsString(audio_url) && audio_url->valuestring && strlen(audio_url->valuestring) > 0) {
-                std::string audio_path = audio_url->valuestring;
-                
-                if (audio_path.find("?") != std::string::npos) {
-                    size_t query_pos = audio_path.find("?");
-                    std::string path = audio_path.substr(0, query_pos);
-                    std::string query = audio_path.substr(query_pos + 1);
-                    current_music_url_ = buildUrlWithParams(base_url, path, query);
-                } else {
-                    current_music_url_ = base_url + audio_path;
-                }
-                
-                song_name_displayed_ = false;
-                StartStreaming(current_music_url_);
-                
-                if (cJSON_IsString(lyric_url) && lyric_url->valuestring && strlen(lyric_url->valuestring) > 0) {
-                    std::string lyric_path = lyric_url->valuestring;
-                    if (lyric_path.find("?") != std::string::npos) {
-                        size_t query_pos = lyric_path.find("?");
-                        std::string path = lyric_path.substr(0, query_pos);
-                        std::string query = lyric_path.substr(query_pos + 1);
-                        current_lyric_url_ = buildUrlWithParams(base_url, path, query);
-                    } else {
-                        current_lyric_url_ = base_url + lyric_path;
-                    }
-                    
-                    if (display_mode_ == DISPLAY_MODE_LYRICS) {
-                        if (is_lyric_running_) {
-                            is_lyric_running_ = false;
-                            if (lyric_thread_.joinable()) {
-                                lyric_thread_.join();
-                            }
-                        }
-                        
-                        is_lyric_running_ = true;
-                        current_lyric_index_ = -1;
-                        lyrics_.clear();
-                        
-                        lyric_thread_ = std::thread(&Esp32Music::LyricDisplayThread, this);
-                    }
-                }
-                
-                cJSON_Delete(response_json);
-                return true;
-            } else {
-                ESP_LOGE(TAG, "No audio URL found");
-                cJSON_Delete(response_json);
-                return false;
-            }
-        }
+
+    if (body.empty()) {
+        ESP_LOGE(TAG, "[MusicServer] Empty response");
+        return false;
     }
-    
-    return false;
+
+    ESP_LOGI(TAG, "[MusicServer] Response: %.200s", body.c_str());
+
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (!root) {
+        ESP_LOGE(TAG, "[MusicServer] JSON parse error");
+        return false;
+    }
+
+    cJSON* audio_url = cJSON_GetObjectItem(root, "audio_url");
+    cJSON* title     = cJSON_GetObjectItem(root, "title");
+    cJSON* format    = cJSON_GetObjectItem(root, "format");
+    cJSON* bitrate   = cJSON_GetObjectItem(root, "bitrate");
+
+    if (!cJSON_IsString(audio_url) || !audio_url->valuestring || strlen(audio_url->valuestring) == 0) {
+        ESP_LOGE(TAG, "[MusicServer] No audio_url in response");
+        cJSON_Delete(root);
+        return false;
+    }
+
+    current_music_url_ = audio_url->valuestring;
+
+    // Cập nhật tên bài hát nếu server trả về
+    if (cJSON_IsString(title) && title->valuestring) {
+        current_song_name_ = title->valuestring;
+    }
+
+    ESP_LOGI(TAG, "[MusicServer] Got stream: title=%s format=%s bitrate=%.0f",
+             cJSON_IsString(title) ? title->valuestring : "?",
+             cJSON_IsString(format) ? format->valuestring : "?",
+             cJSON_IsNumber(bitrate) ? bitrate->valuedouble : 0.0);
+
+    cJSON_Delete(root);
+
+    song_name_displayed_ = false;
+    StartStreaming(current_music_url_);
+
+    ESP_LOGI(TAG, "[MusicServer] Streaming started");
+    return true;
+}
+
+bool Esp32Music::Download(const std::string& song_name, const std::string& artist_name) {
+    ESP_LOGI(TAG, "=== NEW SONG REQUEST: Cleaning up old cache first ===");
+    ForceCleanupCache();
+
+    ESP_LOGI(TAG, "Getting music: %s - %s", song_name.c_str(), artist_name.c_str());
+    current_song_name_ = song_name;
+    last_downloaded_data_.clear();
+
+    return DownloadViaPiped(song_name, artist_name);
 }
 
 std::string Esp32Music::GetDownloadResult() {
