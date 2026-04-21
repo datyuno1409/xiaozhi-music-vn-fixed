@@ -1,0 +1,99 @@
+﻿diff --git a/music-server/main.py b/music-server/main.py
+index c9c89bd..9bc9b4e 100644
+--- a/music-server/main.py
++++ b/music-server/main.py
+@@ -88,38 +88,42 @@ def get_stream_url(video_id: str) -> dict | None:
+     video_url = f"https://www.youtube.com/watch?v={video_id}"
+     logger.info(f"Getting stream for: {video_id}")
+ 
+-    # Danh s├ích format theo thß╗⌐ tß╗▒ ╞░u ti├¬n
+-    # ESP32 decode ─æ╞░ß╗úc: mp3, m4a (aac), webm/opus (kh├│ h╞ín)
+-    format_attempts = [
+-        # ╞»u ti├¬n mp3 128kbps
+-        "bestaudio[ext=mp3][abr<=128]",
+-        # m4a (aac) 128kbps
+-        "bestaudio[ext=m4a][abr<=128]",
+-        # mp3 bß║Ñt kß╗│ bitrate
+-        "bestaudio[ext=mp3]",
+-        # m4a bß║Ñt kß╗│ bitrate
+-        "bestaudio[ext=m4a]",
+-        # Bß║Ñt kß╗│ audio tß╗æt nhß║Ñt
+-        "bestaudio",
++    # Danh s├ích client theo thß╗⌐ tß╗▒ ╞░u ti├¬n - kh├┤ng cß║ºn PO Token
++    client_attempts = [
++        ["tv_embedded"],
++        ["web_embedded"],
++        ["mweb"],
+     ]
+ 
+-    for fmt in format_attempts:
+-        opts = make_ydl_opts({"format": fmt})
++    format_str = "bestaudio[ext=m4a][abr<=160]/bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio"
++
++    last_error = ""
++    for clients in client_attempts:
++        opts = make_ydl_opts({
++            "format": format_str,
++            "extractor_args": {
++                "youtube": {
++                    "player_client": clients,
++                }
++            },
++        })
+         try:
+             with yt_dlp.YoutubeDL(opts) as ydl:
+                 info = ydl.extract_info(video_url, download=False)
+                 if not info:
++                    last_error = f"No info from {clients}"
+                     continue
+ 
+                 url = info.get("url")
+                 if not url:
++                    last_error = f"No URL from {clients}"
+                     continue
+ 
+                 ext = info.get("ext", "unknown")
+                 abr = info.get("abr", 0)
+                 acodec = info.get("acodec", "unknown")
+ 
+-                logger.info(f"Stream OK: fmt={fmt} ext={ext} abr={abr} codec={acodec}")
++                logger.info(f"Stream OK via {clients}: ext={ext} abr={abr} codec={acodec}")
+                 return {
+                     "url": url,
+                     "ext": ext,
+@@ -127,16 +131,19 @@ def get_stream_url(video_id: str) -> dict | None:
+                     "codec": acodec,
+                     "title": info.get("title", ""),
+                     "duration": info.get("duration", 0),
++                    "client": str(clients),
+                 }
+         except yt_dlp.utils.DownloadError as e:
+-            logger.warning(f"Format '{fmt}' failed: {e}")
++            last_error = f"{clients}: {str(e)[:200]}"
++            logger.warning(f"Client {clients} failed: {e}")
+             continue
+         except Exception as e:
+-            logger.error(f"Unexpected error for fmt '{fmt}': {e}")
++            last_error = f"{clients}: {str(e)[:200]}"
++            logger.error(f"Unexpected error for {clients}: {e}")
+             continue
+ 
+-    logger.error(f"All formats failed for {video_id}")
+-    return None
++    logger.error(f"All clients failed for {video_id}. Last error: {last_error}")
++    return {"_error": last_error}
+ 
+ 
+ # ============================================================
+@@ -237,8 +244,9 @@ def audio(video_id: str):
+         return jsonify({"error": "Invalid videoId"}), 400
+ 
+     stream_info = get_stream_url(video_id)
+-    if not stream_info:
+-        return jsonify({"error": "Cannot get stream"}), 500
++    if not stream_info or stream_info.get("_error"):
++        err = stream_info.get("_error", "Unknown") if stream_info else "None returned"
++        return jsonify({"error": "Cannot get stream", "detail": err}), 500
+ 
+     return jsonify(stream_info)
+ 
