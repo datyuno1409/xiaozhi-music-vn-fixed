@@ -19,7 +19,8 @@ app = Flask(__name__)
 # Cookies - tạo file ngay khi khởi động
 # ============================================================
 COOKIES_FILE = None
-COOKIES_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
+# Đường dẫn tuyệt đối đến cookies.txt
+COOKIES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
 def _init_cookies():
     """Khởi tạo cookies - ưu tiên file cookies.txt, fallback sang env var"""
