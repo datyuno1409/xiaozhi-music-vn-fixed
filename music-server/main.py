@@ -120,7 +120,7 @@ def get_stream_url(video_id: str) -> dict:
 
     # Thử các client theo thứ tự - tv_embedded trước vì hoạt động tốt nhất với cookies
     clients = [["tv_embedded"], ["web"], ["web_embedded"], ["mweb"]]
-    fmt = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=webm]/bestaudio"
+    fmt = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=webm]/bestaudio/best"
 
     last_error = ""
     cookies_f = get_cookies_file()
