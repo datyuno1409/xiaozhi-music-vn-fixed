@@ -1,1 +1,10 @@
+# Không commit cookies lên GitHub vì chứa thông tin đăng nhập
+# Chỉ dùng trên Render
+# cookies.txt
+
+# Python
+__pycache__/
+*.pyc
+.env
 .vercel
+api/__pycache__/

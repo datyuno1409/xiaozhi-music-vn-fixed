@@ -19,30 +19,41 @@ app = Flask(__name__)
 # Cookies - tạo file ngay khi khởi động
 # ============================================================
 COOKIES_FILE = None
+COOKIES_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
 def _init_cookies():
-    """Khởi tạo cookies file từ env var khi app start"""
+    """Khởi tạo cookies - ưu tiên file cookies.txt, fallback sang env var"""
     global COOKIES_FILE
-    cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
-    if not cookies_content:
-        logger.warning("YOUTUBE_COOKIES not set")
-        return
-    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
-                                      delete=False, prefix='yt_cookies_')
-    tmp.write(cookies_content)
-    tmp.close()
-    COOKIES_FILE = tmp.name
-    logger.info(f"Cookies initialized: {COOKIES_FILE} ({len(cookies_content)} chars)")
 
-# Khởi tạo ngay khi import
+    # Cách 1: File cookies.txt trong thư mục server (dùng Render Secret Files)
+    if os.path.exists(COOKIES_PATH):
+        COOKIES_FILE = COOKIES_PATH
+        logger.info(f"Cookies loaded from file: {COOKIES_PATH}")
+        return
+
+    # Cách 2: Env var (chỉ dùng nếu cookies nhỏ < 100KB)
+    cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
+    if cookies_content:
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
+                                          delete=False, prefix='yt_cookies_')
+        tmp.write(cookies_content)
+        tmp.close()
+        COOKIES_FILE = tmp.name
+        logger.info(f"Cookies from env var: {COOKIES_FILE} ({len(cookies_content)} chars)")
+        return
+
+    logger.warning("No cookies configured - YouTube may block requests")
+
 _init_cookies()
 
 def get_cookies_file():
     """Trả về cookies file path, tạo lại nếu cần"""
     global COOKIES_FILE
+    # Ưu tiên file trực tiếp
+    if os.path.exists(COOKIES_PATH):
+        return COOKIES_PATH
     if COOKIES_FILE and os.path.exists(COOKIES_FILE):
         return COOKIES_FILE
-    # File bị mất (restart) - tạo lại
     _init_cookies()
     return COOKIES_FILE
 
