@@ -165,7 +165,13 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
+    return jsonify({
+        "status": "ok",
+        "cookies_env_length": len(cookies_content),
+        "cookies_file": COOKIES_FILE,
+        "cookies_file_exists": bool(COOKIES_FILE and os.path.exists(COOKIES_FILE)),
+    })
 
 
 @app.route("/stream", methods=["GET"])
