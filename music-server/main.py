@@ -16,29 +16,34 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # ============================================================
-# Cookies - lưu trong environment variable YOUTUBE_COOKIES
-# Nội dung file cookies.txt (Netscape format) từ browser
+# Cookies - tạo file ngay khi khởi động
 # ============================================================
 COOKIES_FILE = None
 
-def get_cookies_file():
-    """Tạo temp file cookies từ env var YOUTUBE_COOKIES"""
+def _init_cookies():
+    """Khởi tạo cookies file từ env var khi app start"""
     global COOKIES_FILE
-    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
-        return COOKIES_FILE
-
     cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
     if not cookies_content:
-        logger.warning("YOUTUBE_COOKIES env var not set - may get bot detection")
-        return None
-
-    # Ghi ra temp file
+        logger.warning("YOUTUBE_COOKIES not set")
+        return
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
                                       delete=False, prefix='yt_cookies_')
     tmp.write(cookies_content)
     tmp.close()
     COOKIES_FILE = tmp.name
-    logger.info(f"Cookies file created: {COOKIES_FILE}")
+    logger.info(f"Cookies initialized: {COOKIES_FILE} ({len(cookies_content)} chars)")
+
+# Khởi tạo ngay khi import
+_init_cookies()
+
+def get_cookies_file():
+    """Trả về cookies file path, tạo lại nếu cần"""
+    global COOKIES_FILE
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        return COOKIES_FILE
+    # File bị mất (restart) - tạo lại
+    _init_cookies()
     return COOKIES_FILE
 
 
