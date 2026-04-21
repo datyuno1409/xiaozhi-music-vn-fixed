@@ -103,7 +103,7 @@ def get_stream_url(video_id: str) -> dict:
 
     # Thử các client theo thứ tự
     clients = [["tv_embedded"], ["web_embedded"], ["web"], ["mweb"]]
-    fmt = "bestaudio[ext=m4a][abr<=160]/bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio"
+    fmt = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=webm]/bestaudio"
 
     last_error = ""
     for client in clients:
